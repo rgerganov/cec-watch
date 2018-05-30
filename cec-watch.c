@@ -4,6 +4,7 @@
 #include <linux/uinput.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -13,6 +14,9 @@
         fprintf(stderr, " [%s(), %s:%u]\n", __FUNCTION__, __FILE__, __LINE__); \
         exit(1); \
         }
+
+#define PIPE_READ 0
+#define PIPE_WRITE 1
 
 int create_input_fd()
 {
@@ -58,20 +62,104 @@ void emit(int fd, int type, int code, int val)
     write(fd, &ie, sizeof(ie));
 }
 
+int read_buffer(int fd, char *buffer, int size)
+{
+    int count = 0;
+    while (size > 0) {
+       int r = read(fd, buffer+count, size);
+       if (r <= 0) {
+           break;
+       }
+       count += r;
+       size -= r;
+    }
+    return count;
+}
+
+int get_status()
+{
+    int result = -1;
+    int stdin_pipe[2];
+    int stdout_pipe[2];
+    if (pipe(stdin_pipe) < 0) {
+        fatal("cannot create stdin pipe");
+    }
+    if (pipe(stdout_pipe) < 0) {
+        fatal("cannot create stdout pipe");
+    }
+    printf("Starting cec-client ...\n");
+    pid_t cpid = fork();
+    if (cpid == 0) {
+        // child
+        if (dup2(stdin_pipe[PIPE_READ], STDIN_FILENO) == -1) {
+            fatal("cannot dup2 stdin");
+        }
+        if (dup2(stdout_pipe[PIPE_WRITE], STDOUT_FILENO) == -1) {
+            fatal("cannot dup2 stdin");
+        }
+        close(stdin_pipe[PIPE_READ]);
+        close(stdin_pipe[PIPE_WRITE]);
+        close(stdout_pipe[PIPE_READ]);
+        close(stdout_pipe[PIPE_WRITE]);
+        char *argv[] = { "cec-client", "-s", "-d", "1", NULL };
+        char *environ[] = { NULL };
+        execve("/usr/bin/cec-client", argv, environ);
+    } else if (cpid > 0) {
+        // parent
+        close(stdin_pipe[PIPE_READ]);
+        close(stdout_pipe[PIPE_WRITE]);
+        const char *pow_cmd = "pow 0\n";
+        write(stdin_pipe[PIPE_WRITE], pow_cmd, strlen(pow_cmd));
+        char buffer[1024];
+        int count = read_buffer(stdout_pipe[PIPE_READ], buffer, sizeof(buffer)-1);
+        buffer[count] = 0;
+        printf(">>>\n%s\n<<<\n", buffer);
+        if (strstr(buffer, "power status: on") != NULL) {
+            result = 1;
+        }
+        if (strstr(buffer, "power status: standby") != NULL) {
+            result = 0;
+        }
+        int status = 0;
+        waitpid(cpid, &status, 0);
+        printf("cec-client finished, status=%d\n", status);
+        close(stdin_pipe[PIPE_WRITE]);
+        close(stdout_pipe[PIPE_READ]);
+    } else {
+        fatal("fork failed");
+    }
+    return result;
+}
+
 int main(int argc, char *argv[])
 {
+    int sleep_time = 300;
+    if (argc > 1) {
+        sleep_time = atoi(argv[1]);
+    }
     int fd = create_input_fd();
+    int flag = 0;
     printf("Created input fd=%d\n", fd);
     sleep(1);
-
-    emit(fd, EV_KEY, KEY_F11, 1);
-    emit(fd, EV_SYN, SYN_REPORT, 0);
-    emit(fd, EV_KEY, KEY_F11, 0);
-    emit(fd, EV_SYN, SYN_REPORT, 0);
-
-    sleep(1);
-    ioctl(fd, UI_DEV_DESTROY);
-    close(fd);
-
+    printf("Monitoring CEC status every %d seconds ...\n", sleep_time);
+    while (1) {
+        int pow_status = get_status();
+        if (pow_status == 0) {
+            if (flag == 1) {
+                printf("+++Power status is OFF and flag is set, press F11\n");
+                emit(fd, EV_KEY, KEY_F11, 1);
+                emit(fd, EV_SYN, SYN_REPORT, 0);
+                emit(fd, EV_KEY, KEY_F11, 0);
+                emit(fd, EV_SYN, SYN_REPORT, 0);
+                flag = 0;
+            } else {
+                printf("+++Power status is OFF, setting the flag\n");
+                flag = 1;
+            }
+        }
+        sleep(sleep_time);
+    }
+    //ioctl(fd, UI_DEV_DESTROY);
+    //close(fd);
     return 0;
 }
