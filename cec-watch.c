@@ -156,6 +156,9 @@ int main(int argc, char *argv[])
                 printf("+++Power status is OFF, setting the flag\n");
                 flag = 1;
             }
+        } else if (pow_status == 1) {
+            printf("+++Power status is ON, clear the flag\n");
+            flag = 0;
         }
         sleep(sleep_time);
     }
