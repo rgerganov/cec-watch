@@ -131,6 +131,15 @@ int get_status()
     return result;
 }
 
+int is_hdmi()
+{
+    char mode[64];
+    FILE *f = fopen("/sys/class/display/mode", "r");
+    fscanf(f, "%s\n", mode);
+    fclose(f);
+    return strcmp(mode, "576cvbs") != 0;
+}
+
 int main(int argc, char *argv[])
 {
     int sleep_time = 300;
@@ -143,22 +152,24 @@ int main(int argc, char *argv[])
     sleep(1);
     printf("Monitoring CEC status every %d seconds ...\n", sleep_time);
     while (1) {
-        int pow_status = get_status();
-        if (pow_status == 0) {
-            if (flag == 1) {
-                printf("+++Power status is OFF and flag is set, press F11\n");
-                emit(fd, EV_KEY, KEY_F11, 1);
-                emit(fd, EV_SYN, SYN_REPORT, 0);
-                emit(fd, EV_KEY, KEY_F11, 0);
-                emit(fd, EV_SYN, SYN_REPORT, 0);
+        if (is_hdmi()) {
+            int pow_status = get_status();
+            if (pow_status == 0) {
+                if (flag == 1) {
+                    printf("+++Power status is OFF and flag is set, press F11\n");
+                    emit(fd, EV_KEY, KEY_F11, 1);
+                    emit(fd, EV_SYN, SYN_REPORT, 0);
+                    emit(fd, EV_KEY, KEY_F11, 0);
+                    emit(fd, EV_SYN, SYN_REPORT, 0);
+                    flag = 0;
+                } else {
+                    printf("+++Power status is OFF, setting the flag\n");
+                    flag = 1;
+                }
+            } else if (pow_status == 1) {
+                printf("+++Power status is ON, clear the flag\n");
                 flag = 0;
-            } else {
-                printf("+++Power status is OFF, setting the flag\n");
-                flag = 1;
             }
-        } else if (pow_status == 1) {
-            printf("+++Power status is ON, clear the flag\n");
-            flag = 0;
         }
         sleep(sleep_time);
     }
